@@ -1,0 +1,58 @@
+# dependencies
+node_modules/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.next/
+out/
+dist/
+build/
+coverage/
+*.tsbuildinfo
+
+# env / secrets — never commit real keys
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.pem
+*.key
+id_rsa*
+
+# runtime data
+data/uploads/**
+data/ocr/**
+!data/uploads/.gitkeep
+!data/ocr/.gitkeep
+*.db
+*.sqlite
+*.sqlite3
+
+# hardhat / contracts
+packages/contracts/cache/
+packages/contracts/artifacts/
+packages/contracts/typechain-types/
+packages/contracts/coverage/
+packages/contracts/coverage.json
+packages/contracts/deployments/
+
+# ide / os / tooling
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.log
+.turbo/
+.vercel/
+.railway/
+.render/
+
+# local research dumps (optional large extracts)
+_research_extracts/
