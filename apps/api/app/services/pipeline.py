@@ -35,39 +35,95 @@ def sha256_text(payload: str) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def _set_progress(
+    db: Session,
+    pack: TradePack,
+    *,
+    stage: str,
+    current: int,
+    total: int,
+    message: str,
+) -> None:
+    pack.progress_stage = stage
+    pack.progress_current = current
+    pack.progress_total = total
+    pack.progress_message = message
+    db.commit()
+
+
+def _clear_progress(db: Session, pack: TradePack) -> None:
+    pack.progress_stage = None
+    pack.progress_current = 0
+    pack.progress_total = 0
+    pack.progress_message = None
+
+
 def _pdf_to_images(pdf_path: Path, out_dir: Path) -> list[Path]:
+    """Rasterize PDF pages to PNG. Prefer PyMuPDF (no Poppler); then pdf2image."""
     out_dir.mkdir(parents=True, exist_ok=True)
+    suffix = pdf_path.suffix.lower()
+
+    # Already an image upload — copy as single page.
+    if suffix in {".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff"}:
+        dest = out_dir / "page_001.png"
+        if suffix != ".png":
+            from PIL import Image
+
+            Image.open(pdf_path).convert("RGB").save(dest, "PNG")
+        else:
+            shutil.copy(pdf_path, dest)
+        return [dest]
+
+    errors: list[str] = []
+
+    # 1) PyMuPDF — bundled native libs, works on Windows without Poppler.
+    try:
+        import pymupdf
+
+        doc = pymupdf.open(pdf_path)
+        if doc.page_count < 1:
+            raise ValueError("PDF has zero pages")
+        paths: list[Path] = []
+        # ~200 dpi
+        zoom = 200 / 72
+        matrix = pymupdf.Matrix(zoom, zoom)
+        for i in range(doc.page_count):
+            page = doc.load_page(i)
+            pix = page.get_pixmap(matrix=matrix, alpha=False)
+            dest = out_dir / f"page_{i + 1:03d}.png"
+            pix.save(str(dest))
+            paths.append(dest)
+        doc.close()
+        logger.info("Rasterized %s page(s) via PyMuPDF from %s", len(paths), pdf_path.name)
+        return paths
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"pymupdf: {exc}")
+        logger.warning("PyMuPDF rasterize failed: %s", exc)
+
+    # 2) pdf2image + Poppler (common on Linux / when Poppler is on PATH).
     try:
         from pdf2image import convert_from_path
 
         images = convert_from_path(str(pdf_path), dpi=200)
-        paths: list[Path] = []
+        if not images:
+            raise ValueError("pdf2image returned no pages")
+        paths = []
         for i, img in enumerate(images, start=1):
             p = out_dir / f"page_{i:03d}.png"
             img.save(p, "PNG")
             paths.append(p)
+        logger.info("Rasterized %s page(s) via pdf2image from %s", len(paths), pdf_path.name)
         return paths
     except Exception as exc:  # noqa: BLE001
-        logger.warning("pdf2image failed (%s); copying as single image stub page", exc)
-        # If upload is already an image, use it; else write placeholder note page
-        dest = out_dir / "page_001.png"
-        suffix = pdf_path.suffix.lower()
-        if suffix in {".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff"}:
-            shutil.copy(pdf_path, dest)
-            return [dest]
-        # Create a simple PNG via Pillow with filename text for demo
-        try:
-            from PIL import Image, ImageDraw
+        errors.append(f"pdf2image: {exc}")
+        logger.warning("pdf2image failed: %s", exc)
 
-            img = Image.new("RGB", (1240, 1754), "white")
-            draw = ImageDraw.Draw(img)
-            draw.text((40, 40), f"DEMO PAGE for {pdf_path.name}", fill="black")
-            draw.text((40, 80), "Install poppler + pdf2image for real PDF rasterization", fill="black")
-            img.save(dest)
-            return [dest]
-        except Exception:
-            dest.write_bytes(b"")  # last resort
-            return [dest]
+    detail = "; ".join(errors) or "unknown"
+    raise RuntimeError(
+        "Could not rasterize PDF into page images. "
+        "Install PyMuPDF (`pip install pymupdf`) or Poppler for pdf2image. "
+        f"Details: {detail}"
+    )
 
 
 def process_pack(db: Session, pack_id: str) -> TradePack:
@@ -77,7 +133,7 @@ def process_pack(db: Session, pack_id: str) -> TradePack:
 
     try:
         pack.status = PackStatus.preprocessing
-        db.commit()
+        _set_progress(db, pack, stage="preprocessing", current=0, total=0, message="Rasterizing PDF pages…")
 
         pack_dir = settings.ocr_dir / pack.id
         if pack_dir.exists():
@@ -92,17 +148,41 @@ def process_pack(db: Session, pack_id: str) -> TradePack:
             db.delete(f)
         db.commit()
 
+        total = len(page_paths)
         pack.status = PackStatus.ocr
-        db.commit()
+        _set_progress(
+            db,
+            pack,
+            stage="ocr",
+            current=0,
+            total=total,
+            message=f"Starting OCR on {total} page(s)…",
+        )
 
         vision_used = 0
         page_rows: list[DocumentPage] = []
 
         for idx, img_path in enumerate(page_paths, start=1):
+            _set_progress(
+                db,
+                pack,
+                stage="ocr",
+                current=idx,
+                total=total,
+                message=f"OCR page {idx} of {total}…",
+            )
             text, conf, engine = run_ocr(str(img_path))
             status = PageStatus.ocr_done
 
             if conf < settings.ocr_confidence_threshold and vision_used < settings.max_vision_pages_per_pack:
+                _set_progress(
+                    db,
+                    pack,
+                    stage="ocr",
+                    current=idx,
+                    total=total,
+                    message=f"Vision OCR page {idx} of {total}…",
+                )
                 v_text, v_conf, v_engine = llm_router.vision_ocr(str(img_path))
                 if v_text:
                     text = v_text
@@ -129,16 +209,29 @@ def process_pack(db: Session, pack_id: str) -> TradePack:
             )
             db.add(page)
             page_rows.append(page)
-
-        db.commit()
-        for p in page_rows:
-            db.refresh(p)
+            db.commit()
+            db.refresh(page)
 
         pack.status = PackStatus.extracting
-        db.commit()
+        _set_progress(
+            db,
+            pack,
+            stage="extract",
+            current=0,
+            total=total,
+            message="Extracting structured fields…",
+        )
 
         # Extract per page; merge fields
-        for page in page_rows:
+        for i, page in enumerate(page_rows, start=1):
+            _set_progress(
+                db,
+                pack,
+                stage="extract",
+                current=i,
+                total=total,
+                message=f"Extracting fields page {i} of {total}…",
+            )
             fields, model = llm_router.extract_fields(page.doc_type.value, page.ocr_text or "")
             for key, value in fields.items():
                 if key == "doc_type":
@@ -156,8 +249,8 @@ def process_pack(db: Session, pack_id: str) -> TradePack:
                         needs_review=needs,
                     )
                 )
+            db.commit()
 
-        db.commit()
         db.refresh(pack)
 
         # Result hash over ordered fields
@@ -168,6 +261,8 @@ def process_pack(db: Session, pack_id: str) -> TradePack:
         pack.result_hash = sha256_text(json.dumps(field_payload, sort_keys=True))
         pack.status = PackStatus.needs_review
         pack.error_message = None
+        _clear_progress(db, pack)
+        pack.progress_message = "OCR complete — ready for review"
         db.commit()
         db.refresh(pack)
         return pack
@@ -176,6 +271,8 @@ def process_pack(db: Session, pack_id: str) -> TradePack:
         logger.exception("process_pack failed")
         pack.status = PackStatus.failed
         pack.error_message = str(exc)
+        _clear_progress(db, pack)
+        pack.progress_message = f"Failed: {exc}"
         db.commit()
         db.refresh(pack)
         raise

@@ -47,6 +47,10 @@ class PackSummary(BaseModel):
     page_count: int
     created_at: datetime | None
     attestation_tx: str | None = None
+    progress_stage: str | None = None
+    progress_current: int = 0
+    progress_total: int = 0
+    progress_message: str | None = None
 
 
 class PackDetail(PackSummary):

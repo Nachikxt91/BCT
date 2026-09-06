@@ -8,6 +8,21 @@ import {
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000";
 
+/** Auth routes that may return 401 without meaning "kick user to login". */
+const PUBLIC_AUTH_PREFIXES = [
+  "/api/v1/auth/login",
+  "/api/v1/auth/register",
+  "/api/v1/auth/forgot-password",
+  "/api/v1/auth/reset-password",
+  "/api/v1/auth/verify-email",
+  "/api/v1/auth/resend-verification",
+];
+
+function isPublicAuthPath(path) {
+  const bare = path.split("?")[0];
+  return PUBLIC_AUTH_PREFIXES.some((p) => bare === p);
+}
+
 async function parseError(res) {
   const text = await res.text();
   try {
@@ -63,9 +78,10 @@ async function apiFetch(path, options = {}, retry = true) {
   }
 
   const res = await fetch(`${API_BASE}${path}`, { ...options, headers, cache: "no-store" });
+  const publicAuth = isPublicAuthPath(path);
 
   if (res.status === 401) {
-    if (retry && getRefreshToken()) {
+    if (retry && !publicAuth && getRefreshToken()) {
       try {
         await refreshAccessToken();
         return apiFetch(path, options, false);
@@ -75,9 +91,10 @@ async function apiFetch(path, options = {}, retry = true) {
         throw new Error("Session expired");
       }
     }
-    clearSession();
-    if (typeof window !== "undefined" && !path.startsWith("/api/v1/auth/login")) {
-      window.location.assign("/login");
+    // Wrong password / public auth failures must not wipe an existing session or hard-redirect.
+    if (!publicAuth) {
+      clearSession();
+      if (typeof window !== "undefined") window.location.assign("/login");
     }
     throw new Error(await parseError(res));
   }
@@ -90,13 +107,15 @@ async function apiFetch(path, options = {}, retry = true) {
 }
 
 export async function register(payload) {
-  const data = await apiFetch("/api/v1/auth/register", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  }, false);
+  const data = await apiFetch(
+    "/api/v1/auth/register",
+    { method: "POST", body: JSON.stringify(payload) },
+    false
+  );
   setSession({
     access_token: data.access_token,
     refresh_token: data.refresh_token,
+    org_id: null,
   });
   return data;
 }
@@ -110,6 +129,7 @@ export async function login(email, password) {
   setSession({
     access_token: data.access_token,
     refresh_token: data.refresh_token,
+    org_id: null,
   });
   return data;
 }
@@ -131,8 +151,11 @@ export async function logout() {
 
 export async function fetchMe() {
   const me = await apiFetch("/api/v1/auth/me");
-  if (me.memberships?.length && !getOrgId()) {
-    setSession({ org_id: me.memberships[0].organization_id });
+  const memberships = me.memberships || [];
+  const ids = new Set(memberships.map((m) => m.organization_id));
+  const current = getOrgId();
+  if (memberships.length && (!current || !ids.has(current))) {
+    setSession({ org_id: memberships[0].organization_id });
   }
   return me;
 }
@@ -191,6 +214,10 @@ export async function uploadPack(file, domain = "electronics") {
     method: "POST",
     body,
   });
+}
+
+export async function processPack(id) {
+  return apiFetch(`/api/v1/packs/${id}/process`, { method: "POST" });
 }
 
 export async function processPackSync(id) {

@@ -20,7 +20,11 @@ export function getOrgId() {
 export function setSession({ access_token, refresh_token, org_id }) {
   if (access_token) localStorage.setItem(ACCESS_KEY, access_token);
   if (refresh_token) localStorage.setItem(REFRESH_KEY, refresh_token);
-  if (org_id) localStorage.setItem(ORG_KEY, org_id);
+  // Explicit null clears a previous user's org; undefined leaves it unchanged.
+  if (org_id !== undefined) {
+    if (org_id) localStorage.setItem(ORG_KEY, org_id);
+    else localStorage.removeItem(ORG_KEY);
+  }
 }
 
 export function clearSession() {

@@ -46,7 +46,7 @@ class Settings(BaseSettings):
     gemini_vision_model: str = "gemini-2.5-flash"
 
     ocr_confidence_threshold: float = 0.75
-    max_vision_pages_per_pack: int = 10
+    max_vision_pages_per_pack: int = 32
     max_upload_mb: int = 50
 
     # Chain (optional — mock if unset)

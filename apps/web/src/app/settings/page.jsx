@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { changePassword } from "@/lib/api";
+import { InfoTip, PageHeading } from "@/components/info-tip";
 
 function SettingsInner({ user }) {
   const membership = user?.memberships?.[0];
@@ -44,17 +45,30 @@ function SettingsInner({ user }) {
 
   return (
     <AppShell active="/settings" user={user}>
-      <div className="mb-6">
-        <p className="text-xs font-semibold uppercase tracking-[0.12em] text-primary">Admin</p>
-        <h2 className="mt-1 text-2xl font-semibold tracking-tight">Settings</h2>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Account security, organization, and platform configuration.
-        </p>
-      </div>
+      <PageHeading
+        eyebrow="Admin"
+        title="Settings"
+        description="Account security, organization, and platform configuration."
+        infoTitle="Settings overview"
+        info={
+          <p>
+            Manage your password and review which models/blockchain settings the API is configured
+            to use. Secrets stay in the API <code>.env</code> — they are never shown in this UI.
+          </p>
+        }
+      />
       <div className="grid gap-4 md:grid-cols-2">
         <Card>
           <CardHeader>
-            <CardTitle>Account</CardTitle>
+            <div className="flex items-center gap-2">
+              <CardTitle>Account</CardTitle>
+              <InfoTip title="Organization tenancy">
+                <p>
+                  Your role controls who can upload, approve, or attest. Packs are isolated per
+                  organization.
+                </p>
+              </InfoTip>
+            </div>
             <CardDescription>Signed-in identity and organization</CardDescription>
           </CardHeader>
           <CardContent className="space-y-2 text-sm text-muted-foreground">

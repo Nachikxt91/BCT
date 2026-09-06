@@ -5,6 +5,7 @@ import { AppShell } from "@/components/app-shell";
 import { AuthGuard } from "@/components/auth-guard";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { listPacks } from "@/lib/api";
+import { PageHeading } from "@/components/info-tip";
 
 function AuditInner({ user }) {
   const [packs, setPacks] = useState([]);
@@ -19,13 +20,24 @@ function AuditInner({ user }) {
 
   return (
     <AppShell active="/audit" user={user}>
-      <div className="mb-6">
-        <p className="text-xs font-semibold uppercase tracking-[0.12em] text-primary">Integrity</p>
-        <h2 className="mt-1 text-2xl font-semibold tracking-tight">Audit trail</h2>
-        <p className="mt-1 text-sm text-muted-foreground">
-          On-chain / mock attestation receipts (hashes only).
-        </p>
-      </div>
+      <PageHeading
+        eyebrow="Integrity"
+        title="Audit trail"
+        description="On-chain / mock attestation receipts (hashes only)."
+        infoTitle="What is an attestation receipt?"
+        info={
+          <>
+            <p>
+              After approval, Attest records fingerprints of the original file and the extraction
+              result. That proves integrity later without exposing private document contents.
+            </p>
+            <p>
+              If blockchain is not configured, the API returns a deterministic mock transaction id
+              so demos still complete end-to-end.
+            </p>
+          </>
+        }
+      />
       <Card>
         <CardHeader>
           <CardTitle>Attested packs</CardTitle>

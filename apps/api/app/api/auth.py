@@ -26,8 +26,10 @@ from app.core.deps import get_current_user
 from app.core.email import send_password_reset_email, send_verification_email
 from app.core.security import (
     create_access_token,
+    ensure_utc,
     hash_password,
     hash_token,
+    is_expired,
     new_raw_token,
     slugify,
     validate_password_strength,
@@ -194,7 +196,7 @@ def refresh(body: RefreshRequest, db: Session = Depends(get_db)):
     th = hash_token(body.refresh_token)
     row = db.query(RefreshToken).filter(RefreshToken.token_hash == th).first()
     now = datetime.now(timezone.utc)
-    if not row or row.revoked_at or row.expires_at < now:
+    if not row or row.revoked_at or is_expired(row.expires_at, now=now):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid refresh token")
 
     row.revoked_at = now
@@ -258,7 +260,7 @@ def reset_password(body: ResetPasswordRequest, db: Session = Depends(get_db)):
     th = hash_token(body.token)
     row = db.query(PasswordResetToken).filter(PasswordResetToken.token_hash == th).first()
     now = datetime.now(timezone.utc)
-    if not row or row.used_at or row.expires_at < now:
+    if not row or row.used_at or is_expired(row.expires_at, now=now):
         raise HTTPException(400, "Invalid or expired reset token")
 
     user = db.get(User, row.user_id)
@@ -280,7 +282,7 @@ def verify_email(body: VerifyEmailRequest, db: Session = Depends(get_db)):
     th = hash_token(body.token)
     row = db.query(EmailVerificationToken).filter(EmailVerificationToken.token_hash == th).first()
     now = datetime.now(timezone.utc)
-    if not row or row.used_at or row.expires_at < now:
+    if not row or row.used_at or is_expired(row.expires_at, now=now):
         raise HTTPException(400, "Invalid or expired verification token")
 
     user = db.get(User, row.user_id)
@@ -302,16 +304,16 @@ def resend_verification(body: ResendVerificationRequest, db: Session = Depends(g
         return msg
 
     # simple rate limit: one unused token in last 2 minutes
-    recent = (
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=2)
+    recent_rows = (
         db.query(EmailVerificationToken)
         .filter(
             EmailVerificationToken.user_id == user.id,
             EmailVerificationToken.used_at.is_(None),
-            EmailVerificationToken.created_at
-            >= datetime.now(timezone.utc) - timedelta(minutes=2),
         )
-        .first()
+        .all()
     )
+    recent = next((t for t in recent_rows if ensure_utc(t.created_at) and ensure_utc(t.created_at) >= cutoff), None)
     if recent:
         return msg
 

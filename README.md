@@ -2,7 +2,8 @@
 
 Enterprise multi-user MVP for **LC trade document OCR** (electronics domain) with org tenancy, JWT auth, and hash attestation on blockchain.
 
-> **Architecture & folder guide:** [`ARCHITECTURE_AND_CODEBASE_GUIDE.md`](./ARCHITECTURE_AND_CODEBASE_GUIDE.md) — what we’re building, why, and how every directory connects (layman + technical).
+> **Start here (plain English):** [`HOW_IT_WORKS.md`](./HOW_IT_WORKS.md) — why we build this, user journey, and under-the-hood overview.  
+> **Architecture & folder guide:** [`ARCHITECTURE_AND_CODEBASE_GUIDE.md`](./ARCHITECTURE_AND_CODEBASE_GUIDE.md) — deeper directory map and design decisions.
 
 ## Structure
 

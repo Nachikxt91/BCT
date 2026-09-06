@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shutil
+import threading
 from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile
@@ -24,6 +25,33 @@ from app.services.pipeline import process_pack, sha256_file
 
 router = APIRouter()
 
+# In-process lock for the lifetime of an OCR run (not a time window — long jobs stay locked).
+_active_jobs: set[str] = set()
+_jobs_lock = threading.Lock()
+
+
+def _try_begin_job(pack_id: str) -> bool:
+    with _jobs_lock:
+        if pack_id in _active_jobs:
+            return False
+        _active_jobs.add(pack_id)
+        return True
+
+
+def _end_job(pack_id: str) -> None:
+    with _jobs_lock:
+        _active_jobs.discard(pack_id)
+
+
+def _run_process(pack_id: str) -> None:
+    # Caller already reserved pack_id via _try_begin_job.
+    db = SessionLocal()
+    try:
+        process_pack(db, pack_id)
+    finally:
+        _end_job(pack_id)
+        db.close()
+
 
 def _to_summary(pack: TradePack) -> PackSummary:
     return PackSummary(
@@ -35,6 +63,10 @@ def _to_summary(pack: TradePack) -> PackSummary:
         page_count=pack.page_count,
         created_at=pack.created_at,
         attestation_tx=pack.attestation_tx,
+        progress_stage=pack.progress_stage,
+        progress_current=pack.progress_current or 0,
+        progress_total=pack.progress_total or 0,
+        progress_message=pack.progress_message,
     )
 
 
@@ -70,14 +102,6 @@ def _to_detail(pack: TradePack) -> PackDetail:
         pages=pages,
         fields=fields,
     )
-
-
-def _run_process(pack_id: str) -> None:
-    db = SessionLocal()
-    try:
-        process_pack(db, pack_id)
-    finally:
-        db.close()
 
 
 def _audit(db: Session, ctx: AuthContext, action: str, pack_id: str, meta: dict | None = None) -> None:
@@ -127,7 +151,12 @@ async def upload_pack(
     if not file.filename:
         raise HTTPException(400, "Filename required")
 
-    suffix = Path(file.filename).suffix.lower()
+    # Basename only — reject path traversal / empty names from multipart Content-Disposition.
+    safe_name = Path(file.filename).name
+    if not safe_name or safe_name in {".", ".."}:
+        raise HTTPException(400, "Invalid filename")
+
+    suffix = Path(safe_name).suffix.lower()
     if suffix not in {".pdf", ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".webp"}:
         raise HTTPException(400, "Unsupported file type")
 
@@ -138,7 +167,7 @@ async def upload_pack(
 
     pack = TradePack(
         domain=domain,
-        filename=file.filename,
+        filename=safe_name,
         storage_path="",
         sha256="",
         organization_id=ctx.organization_id,
@@ -149,13 +178,16 @@ async def upload_pack(
 
     dest_dir = settings.upload_dir / ctx.organization_id / pack.id
     dest_dir.mkdir(parents=True, exist_ok=True)
-    dest = dest_dir / file.filename
+    dest = dest_dir / safe_name
+    # Ensure resolved path stays under the pack upload directory.
+    if dest.resolve().parent != dest_dir.resolve():
+        raise HTTPException(400, "Invalid filename")
     dest.write_bytes(data)
 
     pack.storage_path = str(dest)
     pack.sha256 = sha256_file(dest)
     pack.status = PackStatus.uploaded
-    _audit(db, ctx, "upload", pack.id, {"filename": file.filename})
+    _audit(db, ctx, "upload", pack.id, {"filename": safe_name})
     db.commit()
     db.refresh(pack)
     return _to_summary(pack)
@@ -169,10 +201,15 @@ def enqueue_process(
     db: Session = Depends(get_db),
 ):
     pack = get_org_pack(pack_id, ctx, db)
-    if pack.status in {PackStatus.ocr, PackStatus.extracting, PackStatus.preprocessing}:
+    if not _try_begin_job(pack_id):
         raise HTTPException(409, "Pack already processing")
 
     pack.status = PackStatus.queued
+    pack.progress_stage = "queued"
+    pack.progress_current = 0
+    pack.progress_total = 0
+    pack.progress_message = "Queued — waiting to start OCR…"
+    pack.error_message = None
     _audit(db, ctx, "process_queued", pack.id)
     db.commit()
     background_tasks.add_task(_run_process, pack_id)
@@ -186,10 +223,14 @@ def process_sync(
     db: Session = Depends(get_db),
 ):
     pack = get_org_pack(pack_id, ctx, db)
+    if not _try_begin_job(pack_id):
+        raise HTTPException(409, "Pack already processing")
     try:
         pack = process_pack(db, pack_id)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(500, f"Processing failed: {exc}") from exc
+    finally:
+        _end_job(pack_id)
     _audit(db, ctx, "process_sync", pack.id)
     db.commit()
     return _to_detail(pack)
@@ -218,8 +259,9 @@ def attest_pack(
     db: Session = Depends(get_db),
 ):
     pack = get_org_pack(pack_id, ctx, db)
-    if pack.status not in {PackStatus.approved, PackStatus.needs_review, PackStatus.attested}:
-        raise HTTPException(400, "Approve pack before attestation (or complete OCR first)")
+    # Require human approval before integrity attestation (allow re-attest of already attested).
+    if pack.status not in {PackStatus.approved, PackStatus.attested}:
+        raise HTTPException(400, "Approve pack before attestation")
     if not pack.result_hash:
         raise HTTPException(400, "Missing result hash — run OCR first")
 

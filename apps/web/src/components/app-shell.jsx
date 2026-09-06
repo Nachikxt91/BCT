@@ -6,6 +6,7 @@ import { FileText, LayoutDashboard, LogOut, ShieldCheck, Settings } from "lucide
 import { logout } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { PipelineVisual } from "@/components/pipeline-visual";
 import {
   Sidebar,
   SidebarContent,
@@ -70,12 +71,7 @@ function CollapsedTheme() {
 function PipelineHint() {
   const { state } = useSidebar();
   if (state === "collapsed") return null;
-  return (
-    <div className="rounded-lg border border-sidebar-border bg-sidebar-accent/50 px-3 py-2.5 text-xs text-muted-foreground">
-      <p className="font-medium text-sidebar-foreground">Pipeline</p>
-      <p className="mt-1">OCR → Extract → Review → Attest</p>
-    </div>
-  );
+  return <PipelineVisual variant="compact" />;
 }
 
 function UserBlock({ user, onLogout }) {

@@ -1,0 +1,6 @@
+﻿Include the full Next.js web app in the monorepo.
+
+Remove the nested apps/web git repo so frontend source is tracked like the API, while node_modules, .next, venvs, and secrets stay ignored.
+
+Co-authored-by: Cursor <cursoragent@cursor.com>
+

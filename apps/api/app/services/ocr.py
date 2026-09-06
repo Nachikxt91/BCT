@@ -3,9 +3,11 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from app.core.config import settings
-
 logger = logging.getLogger(__name__)
+
+# Cache missing optional engines so we don't spam logs on every page.
+_paddle_unavailable: bool | None = None
+_tesseract_unavailable: bool | None = None
 
 
 def run_ocr(image_path: str) -> tuple[str, float, str]:
@@ -13,19 +15,29 @@ def run_ocr(image_path: str) -> tuple[str, float, str]:
 
     Returns (text, mean_confidence 0-1, engine_name).
     """
+    global _paddle_unavailable, _tesseract_unavailable
+
     path = Path(image_path)
     if not path.exists():
         return "", 0.0, "missing_file"
 
-    try:
-        return _paddle_ocr(str(path))
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("PaddleOCR failed: %s — trying Tesseract", exc)
+    if _paddle_unavailable is not True:
+        try:
+            result = _paddle_ocr(str(path))
+            _paddle_unavailable = False
+            return result
+        except Exception as exc:  # noqa: BLE001
+            _paddle_unavailable = True
+            logger.warning("PaddleOCR unavailable (%s) — will skip for remaining pages", exc)
 
-    try:
-        return _tesseract_ocr(str(path))
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Tesseract failed: %s — using stub OCR", exc)
+    if _tesseract_unavailable is not True:
+        try:
+            result = _tesseract_ocr(str(path))
+            _tesseract_unavailable = False
+            return result
+        except Exception as exc:  # noqa: BLE001
+            _tesseract_unavailable = True
+            logger.warning("Tesseract unavailable (%s) — using stub/vision for remaining pages", exc)
 
     return _stub_ocr(str(path))
 
@@ -78,17 +90,6 @@ def _tesseract_ocr(image_path: str) -> tuple[str, float, str]:
 
 def _stub_ocr(image_path: str) -> tuple[str, float, str]:
     """Offline stub so pipeline works without OCR binaries installed."""
-    name = Path(image_path).name.lower()
-    sample = (
-        "COMMERCIAL INVOICE\n"
-        "Invoice No: INV-DEMO-1001\n"
-        "Date: 15/07/2026\n"
-        "Seller: Demo Electronics Pvt Ltd\n"
-        "Buyer: Acme Imports LLC\n"
-        "Total Amount: USD 12500.00\n"
-        "Description: Wireless modules HS 8517\n"
-        f"Source file: {name}\n"
-    )
-    # Slightly below threshold forces vision path when keys present
-    conf = settings.ocr_confidence_threshold - 0.05
-    return sample, conf, "stub"
+    # Low confidence forces vision fallback when API keys are configured.
+    name = Path(image_path).name
+    return f"[stub OCR — install paddleocr or tesseract for local OCR]\n{name}", 0.1, "stub"

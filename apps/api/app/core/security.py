@@ -17,6 +17,23 @@ PASSWORD_POLICY = re.compile(
 )
 
 
+def ensure_utc(dt: datetime | None) -> datetime | None:
+    """Normalize DB datetimes for comparison (SQLite often returns naive values)."""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def is_expired(dt: datetime | None, *, now: datetime | None = None) -> bool:
+    """True if dt is missing or earlier than now (UTC-safe)."""
+    exp = ensure_utc(dt)
+    if exp is None:
+        return True
+    return exp < (now or datetime.now(timezone.utc))
+
+
 def hash_password(password: str) -> str:
     return pwd_context.hash(password)
 
